@@ -1,0 +1,25 @@
+# Build artifacts
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userprefs
+
+# JetBrains Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# OS junk
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
