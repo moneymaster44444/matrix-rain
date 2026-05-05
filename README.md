@@ -4,6 +4,10 @@ A Windows screensaver that draws a Matrix-style "digital rain" effect, with a
 configurable character set, colour, density, and speed. Built on .NET 9 +
 WinForms. No third-party packages.
 
+<p align="center">
+  <img src="docs/preview.gif" alt="MatrixRain in Windows Screen Saver Settings" width="540">
+</p>
+
 ## Features
 
 - Fullscreen on every monitor; integrates with the standard Windows screensaver
