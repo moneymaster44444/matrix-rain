@@ -23,3 +23,7 @@ Thumbs.db
 *.nupkg
 *.snupkg
 packages/
+
+# Release artefacts (built by release.ps1; uploaded to GitHub Releases, not tracked)
+*.zip
+release-staging-*/
