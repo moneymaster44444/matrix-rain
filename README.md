@@ -13,9 +13,16 @@ WinForms. No third-party packages.
 - Fullscreen on every monitor; integrates with the standard Windows screensaver
   flow (right-click `.scr` → Install, live preview thumbnail in *Screen Saver
   Settings*, idle-trigger via the "Wait" timer).
-- Persistent character grid — every cell on screen is always filled with dim
-  glyphs; rain streams "wipe" through columns and replace characters as they
-  fall, instead of streams drifting over a black void.
+- Starts on a clean black void; the first rain wipe lays down the persistent
+  dim text, which then stays on screen and subtly churns. Subsequent wipes
+  replace characters as they fall through each column.
+- Flickering heads — the leading glyph of each stream re-rolls rapidly while it
+  sits on a row (independent of the fall rate, so it shimmers through many
+  characters even on slow speeds) and freezes on the glyph it lands on as it
+  drops to the next cell.
+- Void streams — ~15% of streams dissolve their tail to black instead of dim
+  green, leaving a dark column behind them. A later normal stream roaming into
+  that column fills it back to dim text, so dark voids open and heal over time.
 - 10 character-set presets, each with its own font fallback chain:
   - **Arabic** (basic letters + Arabic-Indic digits + Persian/Urdu extensions)
   - **Chinese (Hanzi)** (CJK Unified Ideographs, ~20k chars)
@@ -119,7 +126,7 @@ Controls (top to bottom):
 | Setting    | Range          | What it does                                          |
 |------------|----------------|-------------------------------------------------------|
 | Characters | preset list    | Which script the rain is drawn from.                  |
-| Density    | 1–10           | How many columns have an active rain stream.          |
+| Density    | 1–10           | How many rain streams fall at once (they roam columns).|
 | Speed      | 0.1–5.0        | Multiplier on each stream's fall rate. Lower = slower.|
 | Color      | any RGB        | Bright trail colour. Head and dim background derived. |
 
@@ -159,18 +166,37 @@ for *that* field without resetting your other settings.
   A watchdog tick checks the parent HWND each frame and exits cleanly if it's
   been destroyed.
 - **Render** (`MatrixRainForm`):
-  - Two-bitmap pipeline. A persistent **background bitmap** holds every cell
-    in the dim derived colour (the "always full" base layer); only cells that
-    mutate get redrawn there.
-  - Each frame: blit the background to the front buffer, then for every
-    active stream draw the head + 19 trail rows in the bright-to-dim colour
-    ramp (`TrailLength = 20`).
+  - Two-bitmap pipeline. A **background bitmap** holds the persistent dim
+    layer. It starts fully black; a cell is only drawn there once a rain head
+    has passed through it (tracked by a `_revealed` grid), so the first wipe is
+    what reveals the text. After that only cells that mutate get redrawn.
+  - Each frame: blit the background to the front buffer, then for every active
+    stream draw 19 trail rows in the bright-to-dim colour ramp
+    (`TrailLength = 20`), followed by the head on top.
   - Stream heads advance at a per-stream rate (1–3 frames per row, scaled by
-    the speed multiplier). When a head crosses into a new row, the grid cell's
-    character is replaced — that's the "characters change as the rain wipes
-    through" effect.
-  - A small fraction of random background cells (`cells/1200`) re-roll each
-    frame so the dim layer subtly churns instead of sitting frozen.
+    the speed multiplier). While the head sits on a row it re-rolls its glyph
+    every `HeadFlickerInterval` frames — decoupled from the fall rate, so it
+    flickers rapidly even when the stream crawls. When the head advances, the
+    glyph it last showed is frozen into the cell it leaves (and that cell is
+    revealed). The head cell is cleared to black before its glyph is drawn so
+    the changing glyph leaves no residue over the dim layer.
+  - Streams don't own a fixed column. Density sets how many fall concurrently
+    (`cols / (11 − density)`); each stream picks a random *free* column when it
+    spawns and roams to another when it respawns (`_columnActive` tracks
+    occupancy so two heads never share a column), so every column gets rained
+    on over time instead of a fixed evenly-spaced subset.
+  - On (re)spawn each stream has a `VoidStreamChance` (~15%) of being a **void
+    stream**: its trail uses a ramp that fades to black instead of dim, and the
+    cells it leaves are *un-revealed* (settled back to black) rather than kept
+    as dim text — so it carves a dark column. The glyph is still stored so the
+    dissolving tail can draw it on the way out; once revealed cleared, bursts
+    skip the cell until a normal stream re-reveals it.
+  - The dim layer churns mostly in short localized **bursts**: a revealed cell
+    wakes up and re-rolls every `BurstChangeInterval` frames (~15 flips/sec)
+    for a 2–3 s burst, then goes quiet. Active bursts are kept near
+    `cells / BurstCellsPerBurst`. On top of that a few revealed cells re-roll a
+    single time each frame (`cells / SingleFlipCellsPerFlip`), the old
+    scattered-flip churn. Either way the untouched void stays black.
   - Brushes, font, and `StringFormat` are created once.
     `TextRenderingHint.SingleBitPerPixelGridFit` keeps glyphs crisp and avoids
     halo overdraw between dim and bright layers (without anti-aliasing, the
