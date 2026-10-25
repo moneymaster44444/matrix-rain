@@ -39,13 +39,30 @@ public class MatrixRainForm : Form
     private readonly List<CellBurst> _bursts = new();
 
     private Font _font = null!;
-    private SolidBrush _bgGreenBrush = null!;
     private SolidBrush _blackBrush = null!;
-    // Index 0 = head (white), 1..N-1 = green ramp from bright down to background dim.
-    private SolidBrush[] _trailBrushes = Array.Empty<SolidBrush>();
-    // Same head/bright start, but the ramp fades to black instead of dim — used
-    // by "void" streams that leave a dark column behind them.
-    private SolidBrush[] _voidTrailBrushes = Array.Empty<SolidBrush>();
+    // _palettes[0] is the picked colour. In RGB mode there's one palette per
+    // hue step instead, and every new stream picks one at random.
+    private Palette[] _palettes = Array.Empty<Palette>();
+    // Palette of the stream that last froze each cell (its dim text colour).
+    private byte[,] _cellPalette = new byte[0, 0];
+    // Palette of each column's latest stream, so the next one differs.
+    private byte[] _columnPalette = Array.Empty<byte>();
+    // Every palette brush, for disposal.
+    private readonly List<SolidBrush> _paletteBrushes = new();
+
+    // RGB mode: each new drop gets a random, fully saturated colour clearly
+    // different from its column's current one, and wipes that colour down
+    // the column as it falls.
+    private const int RgbHueSteps = 72;        // 5° apart
+    private const int RgbMinHueSteps = 8;      // 40° minimum change per column
+    private const int RgbHueAttempts = 16;
+    private const byte NoPalette = 255;
+
+    // Dim: the persistent background text.
+    // Trail: index 0 = head (white), 1..N-1 = ramp from bright down to dim.
+    // VoidTrail: same head/bright start, but the ramp fades to black instead
+    // of dim — used by "void" streams that leave a dark column behind them.
+    private sealed record Palette(SolidBrush Dim, SolidBrush[] Trail, SolidBrush[] VoidTrail);
     private StringFormat _stringFormat = null!;
 
     private LanguageDefinition _language = null!;
@@ -110,6 +127,8 @@ public class MatrixRainForm : Form
         // un-revealed (returned to the dark void) instead of settling as dim
         // text. Decided fresh on every spawn/respawn.
         public bool Void;
+        // Index into _palettes; also decided fresh on every spawn/respawn.
+        public byte PaletteIndex;
     }
 
     public MatrixRainForm(Rectangle bounds, bool isPreview, Config config)
@@ -192,62 +211,20 @@ public class MatrixRainForm : Form
             _cellHeight = Math.Max(1, (int)Math.Round(_font.GetHeight(g)));
         }
 
-        // Color palette derived from the user-picked bright trail color:
-        //   bright = picker
-        //   dim    = picker * 0.20  (background, & trail tail end)
-        //   head   = picker * 0.15 + white * 0.85  (near-white tinted by picker)
-        // For the canonical Matrix green (#00FF41) this reproduces the
-        // original (0,51,13) dim and (~217,255,~227) head colours.
-        var picker = Color.FromArgb(255, _config.ColorR, _config.ColorG, _config.ColorB);
-        var dim = Color.FromArgb(
-            255,
-            (int)Math.Round(picker.R * 0.20),
-            (int)Math.Round(picker.G * 0.20),
-            (int)Math.Round(picker.B * 0.20));
-        var head = Color.FromArgb(
-            255,
-            (int)Math.Round(picker.R * 0.15 + 255 * 0.85),
-            (int)Math.Round(picker.G * 0.15 + 255 * 0.85),
-            (int)Math.Round(picker.B * 0.15 + 255 * 0.85));
-
-        _bgGreenBrush = new SolidBrush(dim);
         _blackBrush = new SolidBrush(Color.Black);
-
-        // Trail ramp: head at index 0, then a smooth lerp from bright (picker)
-        // at index 1 down to dim at index N-1, so the tail dissolves into the
-        // background layer.
-        _trailBrushes = new SolidBrush[TrailLength];
-        _trailBrushes[0] = new SolidBrush(head);
-        for (int i = 1; i < TrailLength; i++)
-        {
-            float t = (i - 1) / (float)(TrailLength - 1);
-            int r = (int)Math.Round((1 - t) * picker.R + t * dim.R);
-            int g = (int)Math.Round((1 - t) * picker.G + t * dim.G);
-            int b = (int)Math.Round((1 - t) * picker.B + t * dim.B);
-            _trailBrushes[i] = new SolidBrush(Color.FromArgb(255, r, g, b));
-        }
-
-        // Void ramp: identical head, but lerps from bright (picker) down to
-        // pure black so the tail dissolves into darkness, leaving no dim text.
-        _voidTrailBrushes = new SolidBrush[TrailLength];
-        _voidTrailBrushes[0] = new SolidBrush(head);
-        for (int i = 1; i < TrailLength; i++)
-        {
-            float t = (i - 1) / (float)(TrailLength - 1);
-            int r = (int)Math.Round((1 - t) * picker.R);
-            int g = (int)Math.Round((1 - t) * picker.G);
-            int b = (int)Math.Round((1 - t) * picker.B);
-            _voidTrailBrushes[i] = new SolidBrush(Color.FromArgb(255, r, g, b));
-        }
 
         _cols = Math.Max(1, ClientSize.Width / _cellWidth);
         _rows = Math.Max(1, ClientSize.Height / _cellHeight);
+        BuildPalettes();
         _grid = new char[_cols, _rows];
         for (int c = 0; c < _cols; c++)
             for (int r = 0; r < _rows; r++)
                 _grid[c, r] = RandomChar();
         // Nothing revealed yet — the whole screen starts as a black void.
         _revealed = new bool[_cols, _rows];
+        _cellPalette = new byte[_cols, _rows];
+        _columnPalette = new byte[_cols];
+        Array.Fill(_columnPalette, NoPalette);
 
         int w = Math.Max(1, ClientSize.Width);
         int h = Math.Max(1, ClientSize.Height);
@@ -263,6 +240,113 @@ public class MatrixRainForm : Form
         }
 
         InitStreams();
+    }
+
+    private void BuildPalettes()
+    {
+        if (!_config.RgbMode)
+        {
+            _palettes = new[] { BuildPalette(Color.FromArgb(255, _config.ColorR, _config.ColorG, _config.ColorB)) };
+            return;
+        }
+        _palettes = new Palette[RgbHueSteps];
+        for (int k = 0; k < RgbHueSteps; k++)
+            _palettes[k] = BuildPalette(HueToColor(k * 360.0 / RgbHueSteps));
+    }
+
+    // Palette for a new stream in this column.
+    private byte PickPalette(int col)
+    {
+        if (!_config.RgbMode) return 0;
+        int prev = _columnPalette[col];
+        for (int attempt = 0; attempt < RgbHueAttempts; attempt++)
+        {
+            int k = _rng.Next(RgbHueSteps);
+            if (prev == NoPalette) return (byte)k;
+            int d = Math.Abs(k - prev);
+            if (Math.Min(d, RgbHueSteps - d) >= RgbMinHueSteps) return (byte)k;
+        }
+        return (byte)((prev + RgbHueSteps / 2) % RgbHueSteps);
+    }
+
+    private void AssignPalette(Stream s)
+    {
+        s.PaletteIndex = PickPalette(s.Col);
+        _columnPalette[s.Col] = s.PaletteIndex;
+    }
+
+    // Color palette derived from one bright trail color:
+    //   bright = picker
+    //   dim    = picker * 0.20  (background, & trail tail end)
+    //   head   = picker * 0.15 + white * 0.85  (near-white tinted by picker)
+    // For the canonical Matrix green (#00FF41) this reproduces the
+    // original (0,51,13) dim and (~217,255,~227) head colours.
+    private Palette BuildPalette(Color picker)
+    {
+        var dim = Color.FromArgb(
+            255,
+            (int)Math.Round(picker.R * 0.20),
+            (int)Math.Round(picker.G * 0.20),
+            (int)Math.Round(picker.B * 0.20));
+        var head = Color.FromArgb(
+            255,
+            (int)Math.Round(picker.R * 0.15 + 255 * 0.85),
+            (int)Math.Round(picker.G * 0.15 + 255 * 0.85),
+            (int)Math.Round(picker.B * 0.15 + 255 * 0.85));
+
+        // Trail ramp: head at index 0, then a smooth lerp from bright (picker)
+        // at index 1 down to dim at index N-1, so the tail dissolves into the
+        // background layer.
+        var trail = new SolidBrush[TrailLength];
+        trail[0] = NewPaletteBrush(head);
+        for (int i = 1; i < TrailLength; i++)
+        {
+            float t = (i - 1) / (float)(TrailLength - 1);
+            int r = (int)Math.Round((1 - t) * picker.R + t * dim.R);
+            int g = (int)Math.Round((1 - t) * picker.G + t * dim.G);
+            int b = (int)Math.Round((1 - t) * picker.B + t * dim.B);
+            trail[i] = NewPaletteBrush(Color.FromArgb(255, r, g, b));
+        }
+
+        // Void ramp: identical head, but lerps from bright (picker) down to
+        // pure black so the tail dissolves into darkness, leaving no dim text.
+        var voidTrail = new SolidBrush[TrailLength];
+        voidTrail[0] = trail[0];
+        for (int i = 1; i < TrailLength; i++)
+        {
+            float t = (i - 1) / (float)(TrailLength - 1);
+            int r = (int)Math.Round((1 - t) * picker.R);
+            int g = (int)Math.Round((1 - t) * picker.G);
+            int b = (int)Math.Round((1 - t) * picker.B);
+            voidTrail[i] = NewPaletteBrush(Color.FromArgb(255, r, g, b));
+        }
+
+        return new Palette(NewPaletteBrush(dim), trail, voidTrail);
+    }
+
+    private SolidBrush NewPaletteBrush(Color color)
+    {
+        var brush = new SolidBrush(color);
+        _paletteBrushes.Add(brush);
+        return brush;
+    }
+
+    // Fully saturated, full-brightness colour for a hue in degrees.
+    private static Color HueToColor(double hue)
+    {
+        double x = hue / 60 % 6;
+        int sector = (int)x;
+        int up = (int)Math.Round(255 * (x - sector));
+        int down = 255 - up;
+        return sector switch
+        {
+            0 => Color.FromArgb(255, 255, up, 0),
+            1 => Color.FromArgb(255, down, 255, 0),
+            2 => Color.FromArgb(255, 0, 255, up),
+            3 => Color.FromArgb(255, 0, down, 255),
+            4 => Color.FromArgb(255, up, 0, 255),
+            _ => Color.FromArgb(255, 255, 0, down),
+        };
     }
 
     private static Font LoadFont(string[] families, float pointSize)
@@ -327,7 +411,7 @@ public class MatrixRainForm : Form
         // Base advance rate is 1–3 frames per row. Speed multiplier scales it.
         int baseFps = 1 + _rng.Next(3);
         int fps = Math.Max(1, (int)Math.Round(baseFps / speedMul));
-        return new Stream
+        var stream = new Stream
         {
             Col = col,
             // Negative head row = stream is still above the visible area.
@@ -342,6 +426,8 @@ public class MatrixRainForm : Form
             HeadFlickerCounter = 0,
             Void = _rng.NextDouble() < VoidStreamChance,
         };
+        AssignPalette(stream);
+        return stream;
     }
 
     private void OnTick(object? sender, EventArgs e)
@@ -387,6 +473,7 @@ public class MatrixRainForm : Form
                     s.HeadChar = RandomChar();
                     s.HeadFlickerCounter = 0;
                     s.Void = _rng.NextDouble() < VoidStreamChance;
+                    AssignPalette(s);
                 }
                 continue;
             }
@@ -417,6 +504,7 @@ public class MatrixRainForm : Form
                 {
                     _grid[s.Col, s.HeadRow] = s.HeadChar;
                     _revealed[s.Col, s.HeadRow] = !s.Void;
+                    _cellPalette[s.Col, s.HeadRow] = s.PaletteIndex;
                     _dirtyCells.Add((s.Col, s.HeadRow));
                 }
 
@@ -499,7 +587,7 @@ public class MatrixRainForm : Form
                 // Un-revealed cells (the initial void, or a void stream's wake)
                 // stay pure black — only revealed cells carry dim text.
                 if (_revealed[c, r])
-                    bg.DrawString(_grid[c, r].ToString(), _font, _bgGreenBrush,
+                    bg.DrawString(_grid[c, r].ToString(), _font, _palettes[_cellPalette[c, r]].Dim,
                         c * _cellWidth, r * _cellHeight, _stringFormat);
             }
             _dirtyCells.Clear();
@@ -521,7 +609,8 @@ public class MatrixRainForm : Form
 
                 // Void streams fade their tail to black (leaving the column
                 // dark behind them); normal streams fade to the dim background.
-                var trail = s.Void ? _voidTrailBrushes : _trailBrushes;
+                var palette = _palettes[s.PaletteIndex];
+                var trail = s.Void ? palette.VoidTrail : palette.Trail;
 
                 // Trail below the head: settled glyphs, brightest just under
                 // the head fading down toward the layer it dissolves into.
@@ -606,10 +695,8 @@ public class MatrixRainForm : Form
         _backgroundBitmap?.Dispose();
         _frontBuffer?.Dispose();
         _font?.Dispose();
-        _bgGreenBrush?.Dispose();
         _blackBrush?.Dispose();
-        foreach (var b in _trailBrushes) b.Dispose();
-        foreach (var b in _voidTrailBrushes) b.Dispose();
+        foreach (var b in _paletteBrushes) b.Dispose();
         _stringFormat?.Dispose();
         if (!_isPreview) Cursor.Show();
         base.OnFormClosed(e);
