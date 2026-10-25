@@ -12,6 +12,9 @@ step — see [Steam Deck / Steam Big Picture](#steam-deck--steam-big-picture).
   <img src="docs/preview.gif" alt="MatrixRain in Windows Screen Saver Settings" width="540">
 </p>
 
+<img width="800" height="450" alt="steamdeck-matrixrain" src="https://github.com/user-attachments/assets/16875f90-1cdc-43d2-9014-ddeaf32ccd5a" />
+
+
 ## Features
 
 - Fullscreen on every monitor; integrates with the standard Windows screensaver
