@@ -22,6 +22,10 @@ public class Config
     public byte ColorG { get; set; } = 255;
     public byte ColorB { get; set; } = 65;
 
+    // When true, each new drop gets its own random colour instead (the picked
+    // colour is kept for when it's switched back off).
+    public bool RgbMode { get; set; } = false;
+
     private static string ConfigPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "MatrixRain",
@@ -52,6 +56,11 @@ public class Config
             if (root.TryGetProperty(nameof(ColorR), out var cr) && cr.TryGetByte(out var crv)) c.ColorR = crv;
             if (root.TryGetProperty(nameof(ColorG), out var cg) && cg.TryGetByte(out var cgv)) c.ColorG = cgv;
             if (root.TryGetProperty(nameof(ColorB), out var cb) && cb.TryGetByte(out var cbv)) c.ColorB = cbv;
+            if (root.TryGetProperty(nameof(RgbMode), out var rgb)
+                && (rgb.ValueKind == JsonValueKind.True || rgb.ValueKind == JsonValueKind.False))
+            {
+                c.RgbMode = rgb.GetBoolean();
+            }
         }
         catch
         {

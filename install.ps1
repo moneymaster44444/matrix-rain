@@ -5,7 +5,7 @@
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $proj = Join-Path $root 'MatrixRain'
-$out  = Join-Path $proj 'bin\Release\net9.0-windows\win-x64\publish\MatrixRain.scr'
+$out  = Join-Path $proj 'bin\Release\net10.0-windows\win-x64\publish\MatrixRain.scr'
 $dest = 'C:\Windows\System32\MatrixRain.scr'
 
 Write-Host '[1/2] Publishing self-contained single-file build...' -ForegroundColor Cyan

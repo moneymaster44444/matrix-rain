@@ -7,6 +7,7 @@ public class ConfigForm : Form
     private readonly ComboBox _language;
     private readonly Label _speedValue;
     private readonly Panel _colorSwatch;
+    private readonly CheckBox _rgbMode;
     private readonly Config _config;
 
     public ConfigForm()
@@ -18,7 +19,7 @@ public class ConfigForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(420, 340);
+        ClientSize = new Size(420, 356);
 
         // Characters
         var lblLanguage = new Label
@@ -116,28 +117,45 @@ public class ConfigForm : Form
         _colorSwatch.Click += openPicker;
         pickBtn.Click += openPicker;
 
+        // RGB mode — each new drop picks a random colour; the picker doesn't apply.
+        _rgbMode = new CheckBox
+        {
+            Text = "RGB mode",
+            Location = new Point(276, 203),
+            AutoSize = true,
+            Checked = _config.RgbMode,
+        };
+        void syncColorEnabled()
+        {
+            _colorSwatch.Enabled = !_rgbMode.Checked;
+            pickBtn.Enabled = !_rgbMode.Checked;
+        }
+        _rgbMode.CheckedChanged += (_, _) => syncColorEnabled();
+        syncColorEnabled();
+
         // Hint — order matches the controls top-to-bottom.
         var hint = new Label
         {
             Text =
                 "Density: number of rain columns.\n" +
-                "Speed: multiplier on fall rate (lower = slower).",
+                "Speed: multiplier on fall rate (lower = slower).\n" +
+                "RGB mode: each new drop gets a random color.",
             Location = new Point(12, 246),
-            Size = new Size(396, 40),
+            Size = new Size(396, 56),
         };
 
         var ok = new Button
         {
             Text = "OK",
             DialogResult = DialogResult.OK,
-            Location = new Point(236, 298),
+            Location = new Point(236, 314),
             Size = new Size(80, 28),
         };
         var cancel = new Button
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(322, 298),
+            Location = new Point(322, 314),
             Size = new Size(80, 28),
         };
         ok.Click += (_, _) => Save();
@@ -147,7 +165,7 @@ public class ConfigForm : Form
             lblLanguage, _language,
             lblDensity, _density,
             lblSpeed, _speed, _speedValue,
-            lblColor, _colorSwatch, pickBtn,
+            lblColor, _colorSwatch, pickBtn, _rgbMode,
             hint,
             ok, cancel,
         });
@@ -177,6 +195,7 @@ public class ConfigForm : Form
         _config.ColorR = c.R;
         _config.ColorG = c.G;
         _config.ColorB = c.B;
+        _config.RgbMode = _rgbMode.Checked;
         _config.Save();
     }
 
